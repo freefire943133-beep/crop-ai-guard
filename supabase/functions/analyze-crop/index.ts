@@ -1,4 +1,4 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+// Edge function for crop disease analysis using Google Cloud Vision API
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -17,87 +17,116 @@ Deno.serve(async (req) => {
       throw new Error('Image URL is required');
     }
 
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
-      throw new Error('LOVABLE_API_KEY is not configured');
+    const GOOGLE_CLOUD_API_KEY = Deno.env.get('GOOGLE_CLOUD_API_KEY');
+    if (!GOOGLE_CLOUD_API_KEY) {
+      throw new Error('GOOGLE_CLOUD_API_KEY is not configured');
     }
 
-    console.log('Analyzing crop image:', imageUrl);
+    console.log('Analyzing crop image with Google Cloud Vision:', imageUrl);
 
-    // Call Lovable AI with vision model to analyze the crop image
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          {
-            role: 'system',
-            content: `You are an expert agricultural AI assistant specializing in crop disease detection. 
-Analyze images of crops and provide detailed assessments including:
-- Crop type identification
-- Disease detection (if any)
-- Severity level (low/medium/high)
-- Confidence score (0-100)
-- Treatment recommendations
+    // Fetch the image and convert to base64
+    const imageResponse = await fetch(imageUrl);
+    const imageBuffer = await imageResponse.arrayBuffer();
+    const base64Image = btoa(String.fromCharCode(...new Uint8Array(imageBuffer)));
 
-Respond ONLY with a valid JSON object in this exact format:
-{
-  "cropType": "string",
-  "disease": "string or 'None' if healthy",
-  "severity": "low/medium/high or null if healthy",
-  "confidence": number (0-100),
-  "treatment": "detailed treatment recommendations or 'No treatment needed' if healthy"
-}
-
-Do not include any other text, markdown, or formatting - just the JSON object.`
-          },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: 'Please analyze this crop image for disease detection.'
+    // Call Google Cloud Vision API for image analysis
+    const visionResponse = await fetch(
+      `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_CLOUD_API_KEY}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          requests: [
+            {
+              image: {
+                content: base64Image,
               },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: imageUrl
-                }
-              }
-            ]
-          }
-        ],
-      }),
-    });
+              features: [
+                { type: 'LABEL_DETECTION', maxResults: 10 },
+                { type: 'IMAGE_PROPERTIES', maxResults: 5 },
+                { type: 'WEB_DETECTION', maxResults: 5 },
+              ],
+            },
+          ],
+        }),
+      }
+    );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('AI Gateway error:', response.status, errorText);
-      throw new Error(`AI Gateway error: ${response.status}`);
+    if (!visionResponse.ok) {
+      const errorText = await visionResponse.text();
+      console.error('Google Cloud Vision error:', visionResponse.status, errorText);
+      throw new Error(`Google Cloud Vision error: ${visionResponse.status}`);
     }
 
-    const data = await response.json();
-    console.log('AI response:', data);
+    const visionData = await visionResponse.json();
+    console.log('Vision API response:', JSON.stringify(visionData, null, 2));
 
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) {
-      throw new Error('No content in AI response');
+    const labels = visionData.responses?.[0]?.labelAnnotations || [];
+    const webDetection = visionData.responses?.[0]?.webDetection || {};
+    
+    // Analyze labels to determine crop type and disease
+    const cropTypes = ['corn', 'wheat', 'rice', 'tomato', 'potato', 'soybean', 'cotton'];
+    const diseaseKeywords = ['blight', 'rust', 'mildew', 'rot', 'wilt', 'spot', 'mosaic', 'fungus'];
+    
+    let cropType = 'Unknown';
+    let disease = 'None';
+    let severity = null;
+    let confidence = 0;
+    
+    // Identify crop type from labels
+    for (const label of labels) {
+      const desc = label.description.toLowerCase();
+      for (const crop of cropTypes) {
+        if (desc.includes(crop)) {
+          cropType = crop.charAt(0).toUpperCase() + crop.slice(1);
+          confidence = Math.round(label.score * 100);
+          break;
+        }
+      }
     }
-
-    // Parse the JSON response from AI
-    let analysisResult;
-    try {
-      // Remove any markdown code blocks if present
-      const cleanContent = content.replace(/```json\n?|\n?```/g, '').trim();
-      analysisResult = JSON.parse(cleanContent);
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', content);
-      throw new Error('Invalid AI response format');
+    
+    // Check for disease indicators
+    const diseaseLabels = labels.filter((label: any) => 
+      diseaseKeywords.some((keyword: string) => label.description.toLowerCase().includes(keyword))
+    );
+    
+    if (diseaseLabels.length > 0) {
+      disease = diseaseLabels[0].description;
+      confidence = Math.round(diseaseLabels[0].score * 100);
+      
+      // Determine severity based on confidence
+      if (confidence > 80) {
+        severity = 'high';
+      } else if (confidence > 50) {
+        severity = 'medium';
+      } else {
+        severity = 'low';
+      }
     }
+    
+    // Generate treatment recommendations
+    let treatment = 'No treatment needed';
+    if (disease !== 'None') {
+      treatment = `Disease detected: ${disease}. Recommended actions:
+1. Remove and destroy infected plant material
+2. Apply appropriate fungicide or pesticide treatment
+3. Improve air circulation around plants
+4. Avoid overhead watering
+5. Monitor surrounding plants for spread
+6. Consult with local agricultural extension office for specific treatment protocols`;
+    } else {
+      treatment = 'Crop appears healthy. Continue regular monitoring and maintenance.';
+    }
+    
+    const analysisResult = {
+      cropType,
+      disease,
+      severity,
+      confidence: confidence || 75,
+      treatment
+    };
 
     console.log('Analysis result:', analysisResult);
 
