@@ -4,16 +4,21 @@ import { Auth } from "@/components/Auth";
 import { ImageUpload } from "@/components/ImageUpload";
 import { DiseaseResult } from "@/components/DiseaseResult";
 import { Dashboard } from "@/components/Dashboard";
+import { Navbar } from "@/components/Navbar";
+import { Hero } from "@/components/Hero";
+import { About } from "@/components/About";
+import { Features } from "@/components/Features";
+import { Footer } from "@/components/Footer";
 import { Button } from "@/components/ui/button";
-import { Leaf, LogOut, Upload, BarChart3 } from "lucide-react";
+import { Leaf, LogOut, Upload, BarChart3, ArrowLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import heroImage from "@/assets/hero-crops.jpg";
 
 type View = "dashboard" | "upload" | "result";
 
 const Index = () => {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [showLanding, setShowLanding] = useState(true);
   const [currentView, setCurrentView] = useState<View>("dashboard");
   const [currentScanId, setCurrentScanId] = useState<string | null>(null);
   const { toast } = useToast();
@@ -22,19 +27,36 @@ const Index = () => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       setLoading(false);
+      if (session?.user) {
+        setShowLanding(false);
+      }
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
+      if (session?.user) {
+        setShowLanding(false);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
+  const handleGetStarted = () => {
+    setShowLanding(false);
+  };
+
+  const handleBackToLanding = () => {
+    if (!user) {
+      setShowLanding(true);
+    }
+  };
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
+    setShowLanding(true);
     toast({
       title: "Signed out",
       description: "You have been successfully signed out.",
@@ -62,59 +84,45 @@ const Index = () => {
     );
   }
 
-  if (!user) {
-    return <Auth />;
+  // Show landing page
+  if (showLanding && !user) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar onGetStarted={handleGetStarted} />
+        <main>
+          <Hero onGetStarted={handleGetStarted} />
+          <About />
+          <Features />
+        </main>
+        <Footer />
+      </div>
+    );
   }
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-accent/5">
-      {/* Hero Section */}
-      <div className="relative h-[300px] overflow-hidden">
-        <img
-          src={heroImage}
-          alt="Agricultural crops"
-          className="w-full h-full object-cover"
-        />
-        <div className="absolute inset-0 bg-gradient-to-r from-primary/90 to-primary/70" />
-        <div className="absolute inset-0 flex items-center">
-          <div className="container mx-auto px-4">
-            <div className="max-w-3xl">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-3 bg-white/20 backdrop-blur-sm rounded-full">
-                  <Leaf className="h-8 w-8 text-white" />
-                </div>
-                <h1 className="text-4xl md:text-5xl font-bold text-white">
-                  CropGuard AI
-                </h1>
-              </div>
-              <p className="text-xl text-white/90 mb-6">
-                AI-powered crop disease prediction and management
-              </p>
-              <div className="flex gap-3">
-                <Button
-                  onClick={() => setCurrentView("upload")}
-                  variant="hero"
-                  size="lg"
-                  className="bg-white text-primary hover:bg-white/90"
-                >
-                  <Upload className="h-5 w-5" />
-                  New Scan
-                </Button>
-                <Button
-                  onClick={() => setCurrentView("dashboard")}
-                  variant="outline"
-                  size="lg"
-                  className="bg-white/10 text-white border-white/30 hover:bg-white/20"
-                >
-                  <BarChart3 className="h-5 w-5" />
-                  Dashboard
-                </Button>
-              </div>
-            </div>
-          </div>
+  // Show auth if not logged in and user clicked get started
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-accent/5">
+        <div className="container mx-auto px-4 py-8">
+          <Button
+            onClick={handleBackToLanding}
+            variant="ghost"
+            className="mb-4"
+          >
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to Home
+          </Button>
+          <Auth />
         </div>
       </div>
+    );
+  }
 
+  // Show authenticated user dashboard
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-accent/5">
+      <Navbar onGetStarted={() => setCurrentView("upload")} />
+      
       {/* Main Content */}
       <div className="container mx-auto px-4 py-8">
         <div className="flex justify-between items-center mb-8">
