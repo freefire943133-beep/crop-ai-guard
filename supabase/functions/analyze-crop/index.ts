@@ -133,8 +133,8 @@ Deno.serve(async (req) => {
           body: JSON.stringify({
             model: 'google/gemini-2.5-flash',
             messages: [
-              { role: 'system', content: 'You are an expert agronomy assistant. Analyze a single crop image URL and return STRICT JSON only with keys: cropType (Title Case), disease (string or "None"), severity (one of low|medium|high or null), confidence (0-100 integer), treatment (short multi-line guidance). No prose.' },
-              { role: 'user', content: `Image URL: ${imageUrl}` }
+              { role: 'system', content: 'You are an expert agronomy assistant. Return STRICT JSON only (no code fences, no prose). Keys: cropType (Title Case), disease (string or "None"), severity (low|medium|high or null), confidence (0-100 integer), treatment (string, multi-line allowed). If unsure, set disease="None", severity=null, confidence=75.' },
+              { role: 'user', content: `Analyze this crop image and output only JSON. Image URL: ${imageUrl}` }
             ],
           }),
         });
@@ -145,21 +145,41 @@ Deno.serve(async (req) => {
         }
 
         const aiData = await aiResp.json();
-        const text = aiData.choices?.[0]?.message?.content || '';
+        const raw = aiData.choices?.[0]?.message?.content || '';
+
+        // Robust JSON extraction: strip code fences and pick first JSON object
+        const cleaned = raw
+          .replace(/```json/gi, '')
+          .replace(/```/g, '')
+          .trim();
+        let text = cleaned;
+        if (!(text.trim().startsWith('{') && text.trim().endsWith('}'))) {
+          const first = text.indexOf('{');
+          const last = text.lastIndexOf('}');
+          if (first !== -1 && last !== -1 && last > first) {
+            text = text.slice(first, last + 1);
+          }
+        }
+
         let parsed: any;
         try {
           parsed = JSON.parse(text);
         } catch (e) {
-          console.error('Failed to parse AI JSON:', text);
+          console.error('Failed to parse AI JSON after cleaning:', raw);
           throw e;
         }
+
+        // Normalize fields
+        const treatmentVal = Array.isArray(parsed.treatment)
+          ? parsed.treatment.join('\n')
+          : (parsed.treatment || 'Crop appears healthy. Continue regular monitoring and maintenance.');
 
         const analysisResult = {
           cropType: parsed.cropType || 'Unknown',
           disease: parsed.disease ?? 'None',
           severity: parsed.severity ?? null,
           confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 75,
-          treatment: parsed.treatment || 'Crop appears healthy. Continue regular monitoring and maintenance.'
+          treatment: treatmentVal
         };
 
         console.log('Fallback AI analysis result:', analysisResult);
