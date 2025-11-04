@@ -17,17 +17,78 @@ Deno.serve(async (req) => {
       throw new Error('Image URL is required');
     }
 
+    // Validate URL to prevent SSRF attacks
+    const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+    if (!SUPABASE_URL) {
+      throw new Error('SUPABASE_URL is not configured');
+    }
+
+    try {
+      const parsedUrl = new URL(imageUrl);
+      const expectedDomain = new URL(SUPABASE_URL).hostname;
+      
+      // Only allow HTTPS URLs from Supabase storage
+      if (parsedUrl.protocol !== 'https:') {
+        throw new Error('Only HTTPS URLs are allowed');
+      }
+      
+      if (!parsedUrl.hostname.includes(expectedDomain)) {
+        throw new Error('Only Supabase storage URLs are allowed');
+      }
+      
+      if (!parsedUrl.pathname.includes('/storage/v1/object/')) {
+        throw new Error('Invalid storage URL format');
+      }
+    } catch (urlError) {
+      console.error('URL validation failed:', urlError);
+      throw new Error('Invalid image URL provided');
+    }
+
     const GOOGLE_CLOUD_API_KEY = Deno.env.get('GOOGLE_CLOUD_API_KEY');
     if (!GOOGLE_CLOUD_API_KEY) {
       throw new Error('GOOGLE_CLOUD_API_KEY is not configured');
     }
 
-    console.log('Analyzing crop image with Google Cloud Vision:', imageUrl);
+    console.log('Analyzing crop image from validated storage URL');
 
-    // Fetch the image and convert to base64
-    const imageResponse = await fetch(imageUrl);
-    const imageBuffer = await imageResponse.arrayBuffer();
-    const base64Image = btoa(String.fromCharCode(...new Uint8Array(imageBuffer)));
+    // Fetch the image with timeout to prevent DoS
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+    
+    let base64Image: string;
+    try {
+      const imageResponse = await fetch(imageUrl, { signal: controller.signal });
+      
+      if (!imageResponse.ok) {
+        throw new Error('Failed to fetch image');
+      }
+      
+      // Check content type
+      const contentType = imageResponse.headers.get('content-type');
+      if (!contentType || !contentType.startsWith('image/')) {
+        throw new Error('URL must point to an image');
+      }
+      
+      // Check size (limit to 10MB)
+      const contentLength = imageResponse.headers.get('content-length');
+      if (contentLength && parseInt(contentLength) > 10 * 1024 * 1024) {
+        throw new Error('Image size exceeds 10MB limit');
+      }
+      
+      const imageBuffer = await imageResponse.arrayBuffer();
+      
+      // Double-check actual size
+      if (imageBuffer.byteLength > 10 * 1024 * 1024) {
+        throw new Error('Image size exceeds 10MB limit');
+      }
+      
+      base64Image = btoa(String.fromCharCode(...new Uint8Array(imageBuffer)));
+      clearTimeout(timeoutId);
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      console.error('Image fetch failed:', fetchError);
+      throw new Error('Failed to fetch image from storage');
+    }
 
     // Call Google Cloud Vision API for image analysis
     const visionResponse = await fetch(
@@ -55,13 +116,12 @@ Deno.serve(async (req) => {
     );
 
     if (!visionResponse.ok) {
-      const errorText = await visionResponse.text();
-      console.error('Google Cloud Vision error:', visionResponse.status, errorText);
-      throw new Error(`Google Cloud Vision error: ${visionResponse.status}`);
+      console.error('Google Cloud Vision error:', visionResponse.status);
+      throw new Error('Image analysis failed');
     }
 
     const visionData = await visionResponse.json();
-    console.log('Vision API response:', JSON.stringify(visionData, null, 2));
+    console.log('Vision API analysis completed successfully');
 
     const labels = visionData.responses?.[0]?.labelAnnotations || [];
     const webDetection = visionData.responses?.[0]?.webDetection || {};
@@ -139,11 +199,12 @@ Deno.serve(async (req) => {
     );
 
   } catch (error) {
-    console.error('Error in analyze-crop function:', error);
+    console.error('Error in analyze-crop function:', error instanceof Error ? error.message : 'Unknown error');
+    
+    // Return generic error to client, keep details server-side
     return new Response(
       JSON.stringify({ 
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
-        details: 'Failed to analyze crop image'
+        error: 'Analysis failed. Please try again with a valid crop image.'
       }),
       { 
         status: 500,

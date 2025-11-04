@@ -34,34 +34,38 @@ export const ImageUpload = ({ onAnalysisComplete }: ImageUploadProps) => {
 
       // Upload to storage
       const fileExt = file.name.split(".").pop();
-      const fileName = `${user.id}/${Date.now()}.${fileExt}`;
-      const { error: uploadError, data } = await supabase.storage
+      const filePath = `${user.id}/${Date.now()}.${fileExt}`;
+      const { error: uploadError } = await supabase.storage
         .from("crop-images")
-        .upload(fileName, file);
+        .upload(filePath, file);
 
       if (uploadError) throw uploadError;
 
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
+      // Generate signed URL (1 hour expiry) for secure access
+      const { data: signedUrlData, error: signedUrlError } = await supabase.storage
         .from("crop-images")
-        .getPublicUrl(fileName);
+        .createSignedUrl(filePath, 3600);
 
-      // Call edge function to analyze image
+      if (signedUrlError || !signedUrlData) {
+        throw new Error("Failed to generate secure image URL");
+      }
+
+      // Call edge function to analyze image using signed URL
       const { data: analysisData, error: analysisError } = await supabase.functions.invoke(
         "analyze-crop",
         {
-          body: { imageUrl: publicUrl },
+          body: { imageUrl: signedUrlData.signedUrl },
         }
       );
 
       if (analysisError) throw analysisError;
 
-      // Save scan to database
+      // Save scan to database with storage path (not URL)
       const { data: scanData, error: scanError } = await supabase
         .from("crop_scans")
         .insert({
           user_id: user.id,
-          image_url: publicUrl,
+          image_url: filePath,
           crop_type: analysisData.cropType,
           disease_detected: analysisData.disease,
           confidence_score: analysisData.confidence,

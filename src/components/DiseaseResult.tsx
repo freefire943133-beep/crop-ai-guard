@@ -12,6 +12,7 @@ interface DiseaseResultProps {
 export const DiseaseResult = ({ scanId }: DiseaseResultProps) => {
   const [scan, setScan] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [imageUrl, setImageUrl] = useState<string>('');
 
   useEffect(() => {
     const fetchScan = async () => {
@@ -23,6 +24,17 @@ export const DiseaseResult = ({ scanId }: DiseaseResultProps) => {
 
       if (!error && data) {
         setScan(data);
+        
+        // Generate signed URL for secure image access
+        if (data.image_url) {
+          const { data: signedUrlData } = await supabase.storage
+            .from('crop-images')
+            .createSignedUrl(data.image_url, 3600); // 1 hour expiry
+          
+          if (signedUrlData) {
+            setImageUrl(signedUrlData.signedUrl);
+          }
+        }
       }
       setLoading(false);
     };
@@ -113,11 +125,11 @@ export const DiseaseResult = ({ scanId }: DiseaseResultProps) => {
             </div>
           )}
 
-          {scan.image_url && (
+          {imageUrl && (
             <div>
               <h4 className="text-sm font-medium text-muted-foreground mb-2">Analyzed Image</h4>
               <img
-                src={scan.image_url}
+                src={imageUrl}
                 alt="Crop scan"
                 className="w-full h-48 object-cover rounded-lg border"
               />
