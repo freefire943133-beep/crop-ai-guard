@@ -119,7 +119,61 @@ Deno.serve(async (req) => {
     if (!visionResponse.ok) {
       const errText = await visionResponse.text();
       console.error('Google Cloud Vision error:', visionResponse.status, errText);
-      throw new Error('Image analysis failed');
+      // Fallback to Lovable AI gateway if Vision fails
+      try {
+        const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+        if (!LOVABLE_API_KEY) throw new Error('LOVABLE_API_KEY missing for fallback');
+
+        const aiResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'google/gemini-2.5-flash',
+            messages: [
+              { role: 'system', content: 'You are an expert agronomy assistant. Analyze a single crop image URL and return STRICT JSON only with keys: cropType (Title Case), disease (string or "None"), severity (one of low|medium|high or null), confidence (0-100 integer), treatment (short multi-line guidance). No prose.' },
+              { role: 'user', content: `Image URL: ${imageUrl}` }
+            ],
+          }),
+        });
+
+        if (!aiResp.ok) {
+          console.error('Lovable AI gateway fallback error:', aiResp.status, await aiResp.text());
+          throw new Error('AI fallback failed');
+        }
+
+        const aiData = await aiResp.json();
+        const text = aiData.choices?.[0]?.message?.content || '';
+        let parsed: any;
+        try {
+          parsed = JSON.parse(text);
+        } catch (e) {
+          console.error('Failed to parse AI JSON:', text);
+          throw e;
+        }
+
+        const analysisResult = {
+          cropType: parsed.cropType || 'Unknown',
+          disease: parsed.disease ?? 'None',
+          severity: parsed.severity ?? null,
+          confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 75,
+          treatment: parsed.treatment || 'Crop appears healthy. Continue regular monitoring and maintenance.'
+        };
+
+        console.log('Fallback AI analysis result:', analysisResult);
+        return new Response(
+          JSON.stringify(analysisResult),
+          {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200
+          }
+        );
+      } catch (fallbackErr) {
+        console.error('Fallback AI analysis failed:', fallbackErr);
+        throw new Error('Image analysis failed');
+      }
     }
 
     const visionData = await visionResponse.json();
