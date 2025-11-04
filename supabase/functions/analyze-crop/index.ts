@@ -63,10 +63,11 @@ Deno.serve(async (req) => {
         throw new Error('Failed to fetch image');
       }
       
-      // Check content type
-      const contentType = imageResponse.headers.get('content-type');
-      if (!contentType || !contentType.startsWith('image/')) {
-        throw new Error('URL must point to an image');
+      // Check content type (some signed URLs return application/octet-stream)
+      const contentType = imageResponse.headers.get('content-type')?.toLowerCase() || '';
+      console.log('Fetched image content-type:', contentType);
+      if (!(contentType.startsWith('image/') || contentType === 'application/octet-stream')) {
+        throw new Error('URL must point to an image (image/* or octet-stream)');
       }
       
       // Check size (limit to 10MB)
@@ -116,7 +117,8 @@ Deno.serve(async (req) => {
     );
 
     if (!visionResponse.ok) {
-      console.error('Google Cloud Vision error:', visionResponse.status);
+      const errText = await visionResponse.text();
+      console.error('Google Cloud Vision error:', visionResponse.status, errText);
       throw new Error('Image analysis failed');
     }
 
